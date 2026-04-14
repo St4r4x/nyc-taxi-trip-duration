@@ -15,14 +15,14 @@ Endpoints :
 """
 
 import pickle
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel
 
 from data.preprocessing import preparer_inference
+from data.schema import PredictInput, PredictOutput
 
 # ── Chargement du modèle ──────────────────────────────────────────────────────
 
@@ -49,30 +49,9 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# ── Schémas ───────────────────────────────────────────────────────────────────
-
-NYC_LON = (-74.3, -73.6)
-NYC_LAT = (40.4,  41.0)
-
-class PredictRequest(BaseModel):
-    pickup_lat:      float = Field(..., ge=NYC_LAT[0], le=NYC_LAT[1], example=40.7580)
-    pickup_lon:      float = Field(..., ge=NYC_LON[0], le=NYC_LON[1], example=-73.9855)
-    dropoff_lat:     float = Field(..., ge=NYC_LAT[0], le=NYC_LAT[1], example=40.6413)
-    dropoff_lon:     float = Field(..., ge=NYC_LON[0], le=NYC_LON[1], example=-73.7781)
-    pickup_datetime: datetime = Field(..., example="2016-06-15T17:30:00")
-
-    @model_validator(mode="after")
-    def coords_differentes(self):
-        if self.pickup_lat == self.dropoff_lat and self.pickup_lon == self.dropoff_lon:
-            raise ValueError("Les coordonnées de départ et d'arrivée sont identiques.")
-        return self
-
-
-class PredictResponse(BaseModel):
-    trip_duration_sec: float
-    trip_duration_min: float
-    distance_km:       float
-
+# ── Schémas locaux ────────────────────────────────────────────────────────────
+# PredictInput et PredictOutput sont définis dans data/schema.py
+# et réutilisés ici pour garantir un contrat unique entre l'API et le pipeline.
 
 class HealthResponse(BaseModel):
     status:   str
@@ -85,8 +64,8 @@ def health():
     return HealthResponse(status="ok", features=model_features)
 
 
-@app.post("/predict", response_model=PredictResponse)
-def predict(req: PredictRequest):
+@app.post("/predict", response_model=PredictOutput)
+def predict(req: PredictInput):
     try:
         X = preparer_inference(
             req.pickup_lat, req.pickup_lon,
@@ -105,7 +84,7 @@ def predict(req: PredictRequest):
         unit=Unit.KILOMETERS,
     )
 
-    return PredictResponse(
+    return PredictOutput(
         trip_duration_sec=round(duree_sec, 1),
         trip_duration_min=round(duree_sec / 60, 2),
         distance_km=round(dist_km, 3),

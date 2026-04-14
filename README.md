@@ -80,13 +80,53 @@ Charge le modèle, applique les features au jeu `test`, affiche des prédictions
 
 ---
 
-### 6. Lancer l'application web
+### 6. Lancer l'API REST
+
+```bash
+uvicorn api.server:app --reload
+```
+
+API FastAPI disponible sur `http://localhost:8000`.
+
+| Endpoint | Méthode | Description |
+|---|---|---|
+| `/health` | GET | Statut du service et liste des features |
+| `/predict` | POST | Prédiction pour un trajet |
+| `/docs` | GET | Documentation interactive (Swagger UI) |
+
+Exemple de requête :
+
+```bash
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pickup_lat": 40.758,
+    "pickup_lon": -73.9855,
+    "dropoff_lat": 40.6413,
+    "dropoff_lon": -73.7781,
+    "pickup_datetime": "2016-06-15T17:30:00"
+  }'
+```
+
+Réponse :
+
+```json
+{
+  "trip_duration_sec": 5275.5,
+  "trip_duration_min": 87.93,
+  "distance_km": 21.773
+}
+```
+
+---
+
+### 7. Lancer l'interface web (Streamlit)
 
 ```bash
 streamlit run api/app.py
 ```
 
-Interface Streamlit : saisir les coordonnées de départ/arrivée, la date et l'heure → prédiction instantanée + carte du trajet.
+Interface graphique : saisir les coordonnées de départ/arrivée, la date et l'heure → prédiction instantanée + carte du trajet.
 
 ---
 
@@ -97,6 +137,7 @@ data/
   raw/                  # CSVs Kaggle originaux (ne pas modifier)
   processed/            # nyc_taxi.db (SQLite)
   download_data.py      # Étape 1 : chargement des CSV
+  preprocessing.py      # Pipeline partagé entraînement + inférence
 model/
   train.py              # Étape 3 : entraînement
   test_model.py         # Étape 5 : test d'inférence
@@ -106,9 +147,51 @@ models/
 notebooks/
   nyc_taxi_analysis.ipynb
 api/
-  app.py                # Application Streamlit
+  server.py             # API REST FastAPI
+  app.py                # Interface Streamlit
 environment.yml
 ```
+
+---
+
+## Schéma des données
+
+### Données brutes (`data/raw/train.csv`)
+
+| Colonne | Type | Description |
+|---|---|---|
+| `id` | string | Identifiant unique du trajet |
+| `vendor_id` | int | Prestataire (1 ou 2) |
+| `pickup_datetime` | datetime | Date et heure de prise en charge |
+| `dropoff_datetime` | datetime | Date et heure de dépôt *(absent du jeu test)* |
+| `passenger_count` | int | Nombre de passagers (1–6) |
+| `pickup_longitude` | float | Longitude du point de départ |
+| `pickup_latitude` | float | Latitude du point de départ |
+| `dropoff_longitude` | float | Longitude du point d'arrivée |
+| `dropoff_latitude` | float | Latitude du point d'arrivée |
+| `store_and_fwd_flag` | string | Flag de transmission différée (Y/N) |
+| `trip_duration` | int | **Cible** — durée en secondes *(absent du jeu test)* |
+
+Zone géographique valide : longitude ∈ [−74.3, −73.6], latitude ∈ [40.4, 41.0].  
+Outliers filtrés à l'entraînement : durée ∉ [60, 7200] sec.
+
+### Requête API (`POST /predict`)
+
+| Champ | Type | Contrainte |
+|---|---|---|
+| `pickup_lat` | float | [40.4, 41.0] |
+| `pickup_lon` | float | [−74.3, −73.6] |
+| `dropoff_lat` | float | [40.4, 41.0] |
+| `dropoff_lon` | float | [−74.3, −73.6] |
+| `pickup_datetime` | datetime | ISO 8601 — ex : `2016-06-15T17:30:00` |
+
+### Réponse API
+
+| Champ | Type | Description |
+|---|---|---|
+| `trip_duration_sec` | float | Durée estimée en secondes |
+| `trip_duration_min` | float | Durée estimée en minutes |
+| `distance_km` | float | Distance à vol d'oiseau (km) |
 
 ---
 
@@ -121,6 +204,5 @@ environment.yml
 | `bearing_sin/cos` | Direction du trajet (encodage circulaire) |
 | `heure`, `jour_semaine`, `mois`, `jour_annee` | Temporel |
 | `is_rush_hour`, `is_weekend`, `is_nuit` | Indicateurs temporels |
-| `vendor_id`, `passenger_count` | Métadonnées |
 | `cluster_depart`, `cluster_arrivee` | Clusters géographiques KMeans (20) |
 | `duree_mediane_paire` | Target encoding : médiane par paire de clusters |
