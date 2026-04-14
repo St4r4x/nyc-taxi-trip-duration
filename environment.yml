@@ -34,3 +34,5 @@ dependencies:
     - haversine
     - streamlit
     - pydeck
+    - fastapi
+    - uvicorn[standard]

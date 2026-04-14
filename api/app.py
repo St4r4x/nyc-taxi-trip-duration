@@ -16,9 +16,10 @@ import pydeck as pdk
 import streamlit as st
 from haversine import haversine, Unit
 
+from data.preprocessing import preparer_inference
+
 # ── Configuration ────────────────────────────────────────────────────────────
-MODEL_PATH   = Path(__file__).parent.parent / "models" / "nyc_taxi.model"
-KM_PAR_DEGRE = 111.0
+MODEL_PATH = Path(__file__).parent.parent / "models" / "nyc_taxi.model"
 
 # Coordonnées par défaut : Times Square → JFK Airport
 DEFAULT_PICKUP  = (40.7580, -73.9855)   # Times Square
@@ -41,52 +42,6 @@ def charger_modele():
 
 artefact = charger_modele()
 
-# ── Feature engineering (même pipeline que model/train.py) ───────────────────
-def construire_features(
-    pickup_lat, pickup_lon,
-    dropoff_lat, dropoff_lon,
-    pickup_dt: datetime,
-    vendor_id: int,
-    passenger_count: int,
-    kmeans,
-) -> np.ndarray:
-    # Distance
-    dist_hav = haversine(
-        (pickup_lat, pickup_lon), (dropoff_lat, dropoff_lon), unit=Unit.KILOMETERS
-    )
-    dlon = np.radians(dropoff_lon - pickup_lon)
-    lat1 = np.radians(pickup_lat)
-    lat2 = np.radians(dropoff_lat)
-    x = np.sin(dlon) * np.cos(lat2)
-    y = np.cos(lat1) * np.sin(lat2) - np.sin(lat1) * np.cos(lat2) * np.cos(dlon)
-    bearing = (np.degrees(np.arctan2(x, y)) + 360) % 360
-    dist_manh = (
-        abs(dropoff_lat - pickup_lat) * KM_PAR_DEGRE
-        + abs(dropoff_lon - pickup_lon) * KM_PAR_DEGRE * np.cos(lat1)
-    )
-
-    # Temporel
-    heure        = pickup_dt.hour
-    jour_semaine = pickup_dt.weekday()
-    mois         = pickup_dt.month
-    jour_annee   = pickup_dt.timetuple().tm_yday
-    is_weekend   = int(jour_semaine >= 5)
-    is_nuit      = int(heure >= 22 or heure <= 5)
-    is_rush      = int(
-        not is_weekend and (7 <= heure <= 9 or 17 <= heure <= 20)
-    )
-
-    # Clusters
-    cluster_dep = kmeans.predict([[pickup_lat,  pickup_lon]])[0]
-    cluster_arr = kmeans.predict([[dropoff_lat, dropoff_lon]])[0]
-
-    return np.array([[
-        dist_hav, bearing, dist_manh,
-        heure, jour_semaine, mois, jour_annee,
-        is_rush, is_weekend, is_nuit,
-        vendor_id, passenger_count,
-        cluster_dep, cluster_arr,
-    ]])
 
 
 # ── Interface ────────────────────────────────────────────────────────────────
@@ -100,8 +55,10 @@ if artefact is None:
     )
     st.stop()
 
-modele  = artefact["modele"]
-kmeans  = artefact["kmeans"]
+modele          = artefact["modele"]
+kmeans          = artefact["kmeans"]
+paire_stats     = artefact["paire_stats"]
+mediane_globale = artefact["mediane_globale"]
 
 # ── Colonnes principales ─────────────────────────────────────────────────────
 col_gauche, col_droite = st.columns([1, 1], gap="large")
@@ -133,8 +90,6 @@ with col_droite:
     pickup_time = st.time_input("Heure de prise en charge", value=datetime(2016, 6, 15, 17, 30))
     pickup_dt   = datetime.combine(pickup_date, pickup_time)
 
-    vendor_id       = st.selectbox("Prestataire (vendor)", options=[1, 2], index=0)
-    passenger_count = st.slider("Nombre de passagers", min_value=1, max_value=6, value=1)
 
 # ── Carte ────────────────────────────────────────────────────────────────────
 st.subheader("Visualisation du trajet")
@@ -182,14 +137,13 @@ st.pydeck_chart(pdk.Deck(
 # ── Prédiction ───────────────────────────────────────────────────────────────
 st.divider()
 if st.button("Calculer la durée estimée", type="primary", use_container_width=True):
-    X = construire_features(
+    X = preparer_inference(
         pickup_lat, pickup_lon,
         dropoff_lat, dropoff_lon,
         pickup_dt,
-        vendor_id, passenger_count,
-        kmeans,
+        kmeans, paire_stats, mediane_globale,
     )
-    duree_sec = float(np.expm1(modele.predict(X)[0]))
+    duree_sec = float(np.expm1(modele.predict(X.values)[0]))
     duree_min = duree_sec / 60
     dist_km   = haversine(
         (pickup_lat, pickup_lon), (dropoff_lat, dropoff_lon), unit=Unit.KILOMETERS
