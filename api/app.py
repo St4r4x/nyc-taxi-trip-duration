@@ -22,6 +22,7 @@ import pydeck as pdk
 import streamlit as st
 
 from api.registry import ModelRegistry
+from config import CFG
 from data.postprocessing import postprocesser
 from data.preprocessing import preparer_inference
 
@@ -175,9 +176,9 @@ with col_droite:
     st.subheader("Contexte")
     heure = pickup_dt.hour
     jour  = pickup_dt.weekday()
-    is_rush    = (jour < 5) and (7 <= heure <= 9 or 17 <= heure <= 20)
+    is_rush    = (jour < 5) and (CFG.temporal.rush_hour_start <= heure <= CFG.temporal.rush_hour_end)
     is_weekend = jour >= 5
-    is_nuit    = heure >= 22 or heure <= 5
+    is_nuit    = heure >= CFG.temporal.nuit_start or heure <= CFG.temporal.nuit_end
 
     badges = []
     if is_rush:    badges.append("🔴 Heure de pointe")

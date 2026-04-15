@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 from haversine import haversine_vector, Unit
 
+from config import CFG
+
 DB_PATH    = Path("data/processed/nyc_taxi.db")
 MODEL_PATH = Path("models/nyc_taxi.model")
 
@@ -47,10 +49,13 @@ def ajouter_features(df: pd.DataFrame, kmeans) -> pd.DataFrame:
     df["mois"]         = dt.dt.month
     df["jour_annee"]   = dt.dt.dayofyear
     df["is_weekend"]   = (df["jour_semaine"] >= 5).astype(int)
-    df["is_nuit"]      = (dt.dt.hour.between(22, 23) | dt.dt.hour.between(0, 5)).astype(int)
+    df["is_nuit"]      = (
+        dt.dt.hour.between(CFG.temporal.nuit_start, 23)
+        | dt.dt.hour.between(0, CFG.temporal.nuit_end)
+    ).astype(int)
     df["is_rush_hour"] = (
         (~df["is_weekend"].astype(bool))
-        & (df["heure"].between(7, 9) | df["heure"].between(17, 20))
+        & df["heure"].between(CFG.temporal.rush_hour_start, CFG.temporal.rush_hour_end)
     ).astype(int)
     df["cluster_depart"]  = kmeans.predict(df[["pickup_latitude",  "pickup_longitude"]].values)
     df["cluster_arrivee"] = kmeans.predict(df[["dropoff_latitude", "dropoff_longitude"]].values)

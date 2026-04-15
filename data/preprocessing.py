@@ -22,12 +22,14 @@ import pandas as pd
 from haversine import haversine_vector, Unit
 from sklearn.cluster import MiniBatchKMeans
 
+from config import CFG
+
 # ── Constantes ────────────────────────────────────────────────────────────────
 
-NYC_LON      = (-74.3, -73.6)
-NYC_LAT      = (40.4,  41.0)
+NYC_LON      = (CFG.geo.lon_min, CFG.geo.lon_max)
+NYC_LAT      = (CFG.geo.lat_min, CFG.geo.lat_max)
 KM_PAR_DEGRE = 111.0
-N_CLUSTERS   = 20
+N_CLUSTERS   = CFG.clustering.n_clusters
 
 FEATURES = [
     "dist_haversine_km", "bearing_sin", "bearing_cos", "dist_manhattan_km",
@@ -127,10 +129,13 @@ def _ajouter_features(
     df["mois"]         = dt.dt.month
     df["jour_annee"]   = dt.dt.dayofyear
     df["is_weekend"]   = (df["jour_semaine"] >= 5).astype(int)
-    df["is_nuit"]      = (dt.dt.hour.between(22, 23) | dt.dt.hour.between(0, 5)).astype(int)
+    df["is_nuit"]      = (
+        dt.dt.hour.between(CFG.temporal.nuit_start, 23)
+        | dt.dt.hour.between(0, CFG.temporal.nuit_end)
+    ).astype(int)
     df["is_rush_hour"] = (
         (~df["is_weekend"].astype(bool))
-        & (df["heure"].between(7, 9) | df["heure"].between(17, 20))
+        & df["heure"].between(CFG.temporal.rush_hour_start, CFG.temporal.rush_hour_end)
     ).astype(int)
 
     # Clusters & target encoding
@@ -147,7 +152,7 @@ def _ajouter_features(
 def filtre_outliers(df: pd.DataFrame) -> pd.DataFrame:
     """Filtre les trajets aberrants. Requiert la colonne trip_duration."""
     m = (
-        df["trip_duration"].between(60, 7200)
+        df["trip_duration"].between(CFG.outliers.duration_min_sec, CFG.outliers.duration_max_sec)
         & df["pickup_longitude"].between(*NYC_LON)
         & df["pickup_latitude"].between(*NYC_LAT)
         & df["dropoff_longitude"].between(*NYC_LON)

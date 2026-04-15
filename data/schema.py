@@ -15,11 +15,13 @@ from typing import Literal
 from haversine import haversine, Unit
 from pydantic import BaseModel, Field, model_validator
 
+from config import CFG
+
 # ── Bornes géographiques NYC ──────────────────────────────────────────────────
 
-LON_MIN, LON_MAX = -74.3, -73.6
-LAT_MIN, LAT_MAX =  40.4,  41.0
-MIN_DISTANCE_M   =  50.0        # distance minimale pickup→dropoff en mètres
+LON_MIN, LON_MAX = CFG.geo.lon_min, CFG.geo.lon_max
+LAT_MIN, LAT_MAX = CFG.geo.lat_min, CFG.geo.lat_max
+MIN_DISTANCE_M   = CFG.api.min_distance_m
 
 
 # ── Données brutes (CSV) ──────────────────────────────────────────────────────

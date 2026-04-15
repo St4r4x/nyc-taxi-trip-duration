@@ -1,0 +1,28 @@
+# ── Domaine géographique NYC ──────────────────────────────────────────────────
+geo:
+  lon_min: -74.3
+  lon_max: -73.6
+  lat_min: 40.4
+  lat_max: 41.0
+
+# ── Filtrage des outliers (entraînement uniquement) ───────────────────────────
+outliers:
+  duration_min_sec: 60
+  duration_max_sec: 7200
+
+# ── Features temporelles ──────────────────────────────────────────────────────
+# Bornes dérivées de l'EDA (médiane de durée par tranche de 30 min, jours de semaine)
+# Pic observé : 8h30–16h00 → heure ∈ [8, 16] en entiers
+temporal:
+  rush_hour_start: 8
+  rush_hour_end: 16
+  nuit_start: 22
+  nuit_end: 5
+
+# ── Validation API (distance minimale pickup→dropoff) ────────────────────────
+api:
+  min_distance_m: 50.0
+
+# ── Clustering géographique ───────────────────────────────────────────────────
+clustering:
+  n_clusters: 20
