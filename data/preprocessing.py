@@ -55,28 +55,25 @@ def rmsle(y_true: np.ndarray, y_pred: np.ndarray) -> float:
 # ── INFÉRENCE — fonction principale ──────────────────────────────────────────
 
 def preparer_inference(
-    pickup_lat: float,
-    pickup_lon: float,
-    dropoff_lat: float,
-    dropoff_lon: float,
-    pickup_datetime: datetime | str,
+    req,
     kmeans: MiniBatchKMeans,
     paire_stats: pd.DataFrame,
     mediane_globale: float,
 ) -> pd.DataFrame:
     """
-    Construit un DataFrame d'une ligne avec toutes les features, à partir des
-    données brutes d'un trajet. Utilisable à l'inférence (API, test unitaire).
+    Construit un DataFrame d'une ligne avec toutes les features, à partir d'un
+    objet PredictInput (ou tout objet avec pickup_lat, pickup_lon, dropoff_lat,
+    dropoff_lon, pickup_datetime). Utilisable à l'inférence (API, test unitaire).
 
     kmeans, paire_stats et mediane_globale proviennent de l'artefact modèle.
     Retourne un DataFrame avec les colonnes FEATURES dans le bon ordre.
     """
     df = pd.DataFrame([{
-        "pickup_latitude":   pickup_lat,
-        "pickup_longitude":  pickup_lon,
-        "dropoff_latitude":  dropoff_lat,
-        "dropoff_longitude": dropoff_lon,
-        "pickup_datetime":   pickup_datetime,
+        "pickup_latitude":   req.pickup_lat,
+        "pickup_longitude":  req.pickup_lon,
+        "dropoff_latitude":  req.dropoff_lat,
+        "dropoff_longitude": req.dropoff_lon,
+        "pickup_datetime":   req.pickup_datetime,
     }])
     return _ajouter_features(df, kmeans, paire_stats, mediane_globale)
 

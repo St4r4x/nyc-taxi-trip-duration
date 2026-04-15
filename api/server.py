@@ -50,9 +50,7 @@ def _predire(req: PredictInput, version: str) -> PredictResponse:
 
     try:
         X     = preparer_inference(
-            req.pickup_lat, req.pickup_lon,
-            req.dropoff_lat, req.dropoff_lon,
-            req.pickup_datetime,
+            req,
             artefact["kmeans"],
             artefact["paire_stats"],
             artefact["mediane_globale"],
