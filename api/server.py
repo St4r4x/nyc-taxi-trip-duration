@@ -5,7 +5,7 @@ Pattern : Synchronous (Web Single)
 Ref : https://github.com/mercari/ml-system-design-pattern/tree/master/Serving-patterns
 
 Lancement :
-    python -m api.main
+    python -m api.server
 
 Endpoints :
     GET  /health              — statut du service
@@ -116,3 +116,8 @@ def predict_batch(
         predicted_at=predicted_at,
         count=len(predictions),
     )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("api.server:app", host="0.0.0.0", port=8000, reload=True)

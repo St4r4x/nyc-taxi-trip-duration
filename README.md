@@ -93,7 +93,7 @@ Lance FastAPI sur `http://localhost:8000` et Streamlit sur `http://localhost:850
 **FastAPI seul :**
 
 ```bash
-python -m api.main
+python -m api.server
 ```
 
 **Streamlit seul :**
@@ -164,8 +164,7 @@ curl -X POST "http://localhost:8000/predict/batch" \
 ```
 api/
   __init__.py
-  main.py            # Point d'entrée : python -m api.main
-  server.py          # Application FastAPI (endpoints)
+  server.py          # Application FastAPI (endpoints + point d'entrée : python -m api.server)
   logger.py          # Logging des prédictions → table predictions (SQLite)
   registry.py        # Registre des modèles avec cache
   app.py             # Interface Streamlit

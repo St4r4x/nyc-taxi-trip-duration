@@ -18,7 +18,7 @@ ROOT = Path(__file__).parent
 processes = [
     {
         "name": "FastAPI",
-        "cmd": [sys.executable, "-m", "api.main"],
+        "cmd": [sys.executable, "-m", "api.server"],
         "url": "http://localhost:8000/docs",
     },
     {
