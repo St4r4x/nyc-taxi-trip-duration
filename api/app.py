@@ -6,24 +6,26 @@ Lancement (depuis la racine du projet) :
     streamlit run api/app.py
 """
 
-import pickle
-from datetime import datetime
+import sys
 from pathlib import Path
+
+# Garantit que la racine du projet est dans sys.path (nécessaire avec streamlit run)
+_ROOT = Path(__file__).parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
 import pydeck as pdk
 import streamlit as st
-from haversine import haversine, Unit
 
+from api.registry import ModelRegistry
+from data.postprocessing import postprocesser
 from data.preprocessing import preparer_inference
 
-# ── Configuration ────────────────────────────────────────────────────────────
-MODEL_PATH = Path(__file__).parent.parent / "models" / "nyc_taxi.model"
-
-# Coordonnées par défaut : Times Square → JFK Airport
-DEFAULT_PICKUP  = (40.7580, -73.9855)   # Times Square
-DEFAULT_DROPOFF = (40.6413, -73.7781)   # JFK
+# ── Configuration ─────────────────────────────────────────────────────────────
 
 st.set_page_config(
     page_title="NYC Taxi Duration",
@@ -31,72 +33,168 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Chargement du modèle ─────────────────────────────────────────────────────
+# ── Lieux célèbres ────────────────────────────────────────────────────────────
+
+LIEUX = {
+    "Times Square":         (40.7580, -73.9855),
+    "JFK Airport":          (40.6413, -73.7781),
+    "LaGuardia Airport":    (40.7769, -73.8740),
+    "Penn Station":         (40.7506, -73.9971),
+    "Grand Central":        (40.7527, -73.9772),
+    "Empire State Building":(40.7484, -73.9857),
+    "Brooklyn Bridge":      (40.7061, -73.9969),
+    "Central Park":         (40.7851, -73.9683),
+    "Wall Street":          (40.7074, -74.0113),
+    "Statue of Liberty":    (40.6892, -74.0445),
+}
+
+LIEUX_NOMS = list(LIEUX.keys())
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.title("🚕 NYC Taxi Duration")
+    st.caption("Modèle LightGBM · Kaggle 2016")
+
+    st.divider()
+
+    # Sélection du modèle
+    versions_dispo = ModelRegistry.versions()
+    if versions_dispo:
+        version_choisie = st.selectbox(
+            "Modèle",
+            options=versions_dispo,
+            index=0,
+        )
+    else:
+        st.error("Aucun modèle trouvé. Entraînez-le d'abord :")
+        st.code("python -m model.train", language="bash")
+        st.stop()
+
+    st.divider()
+
+    # Raccourcis lieux
+    st.subheader("Raccourcis lieux")
+    lieu_depart  = st.selectbox("Départ",  LIEUX_NOMS, index=0, key="lieu_dep")
+    lieu_arrivee = st.selectbox("Arrivée", LIEUX_NOMS, index=1, key="lieu_arr")
+
+    if st.button("Appliquer", width="stretch"):
+        lat_d, lon_d = LIEUX[lieu_depart]
+        lat_a, lon_a = LIEUX[lieu_arrivee]
+        st.session_state["plat"] = lat_d
+        st.session_state["plon"] = lon_d
+        st.session_state["dlat"] = lat_a
+        st.session_state["dlon"] = lon_a
+
+    st.divider()
+
+    # Info modèle
+    try:
+        _, info = ModelRegistry.get(version_choisie)
+        with st.expander("Détails du modèle"):
+            st.write(f"**Version :** `{info.version}`")
+            st.write(f"**Features :** {info.n_features}")
+            st.write(f"**Créé le :** {info.created_at[:10]}")
+    except KeyError:
+        pass
+
+# ── Chargement modèle ─────────────────────────────────────────────────────────
+
 @st.cache_resource
-def charger_modele():
-    if not MODEL_PATH.exists():
-        return None
-    with open(MODEL_PATH, "rb") as f:
-        return pickle.load(f)
+def charger_modele(version: str):
+    return ModelRegistry.get(version)
 
-
-artefact = charger_modele()
-
-
-
-# ── Interface ────────────────────────────────────────────────────────────────
-st.title("🚕 NYC Taxi — Prédiction de durée de trajet")
-st.caption("Modèle LightGBM entraîné sur les données Kaggle NYC Taxi Trip Duration (2016)")
-
-if artefact is None:
-    st.error(
-        "Modèle introuvable. Entraînez-le d'abord :\n\n"
-        "```bash\nconda activate nyc-taxi\npython -m model.train\n```"
-    )
+try:
+    artefact, info = charger_modele(version_choisie)
+except KeyError as e:
+    st.error(str(e))
     st.stop()
 
-modele          = artefact["modele"]
 kmeans          = artefact["kmeans"]
 paire_stats     = artefact["paire_stats"]
 mediane_globale = artefact["mediane_globale"]
+modele          = artefact["modele"]
 
-# ── Colonnes principales ─────────────────────────────────────────────────────
+# ── Initialisation session state ──────────────────────────────────────────────
+
+DEFAULT_PICKUP  = LIEUX["Times Square"]
+DEFAULT_DROPOFF = LIEUX["JFK Airport"]
+
+for key, val in [
+    ("plat", DEFAULT_PICKUP[0]),
+    ("plon", DEFAULT_PICKUP[1]),
+    ("dlat", DEFAULT_DROPOFF[0]),
+    ("dlon", DEFAULT_DROPOFF[1]),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = val
+
+# ── Titre principal ───────────────────────────────────────────────────────────
+
+st.title("Prédiction de durée de trajet")
+
+# ── Formulaire ────────────────────────────────────────────────────────────────
+
 col_gauche, col_droite = st.columns([1, 1], gap="large")
 
 with col_gauche:
     st.subheader("Point de départ")
     pickup_lat = st.number_input(
-        "Latitude", value=DEFAULT_PICKUP[0], min_value=40.4, max_value=41.0,
-        step=0.001, format="%.4f", key="plat"
+        "Latitude", min_value=40.4, max_value=41.0,
+        step=0.001, format="%.4f", key="plat",
     )
     pickup_lon = st.number_input(
-        "Longitude", value=DEFAULT_PICKUP[1], min_value=-74.3, max_value=-73.6,
-        step=0.001, format="%.4f", key="plon"
+        "Longitude", min_value=-74.3, max_value=-73.6,
+        step=0.001, format="%.4f", key="plon",
     )
 
     st.subheader("Point d'arrivée")
     dropoff_lat = st.number_input(
-        "Latitude", value=DEFAULT_DROPOFF[0], min_value=40.4, max_value=41.0,
-        step=0.001, format="%.4f", key="dlat"
+        "Latitude", min_value=40.4, max_value=41.0,
+        step=0.001, format="%.4f", key="dlat",
     )
     dropoff_lon = st.number_input(
-        "Longitude", value=DEFAULT_DROPOFF[1], min_value=-74.3, max_value=-73.6,
-        step=0.001, format="%.4f", key="dlon"
+        "Longitude", min_value=-74.3, max_value=-73.6,
+        step=0.001, format="%.4f", key="dlon",
     )
 
 with col_droite:
     st.subheader("Informations du trajet")
-    pickup_date = st.date_input("Date de prise en charge", value=datetime(2016, 6, 15))
-    pickup_time = st.time_input("Heure de prise en charge", value=datetime(2016, 6, 15, 17, 30))
-    pickup_dt   = datetime.combine(pickup_date, pickup_time)
+    pickup_date = st.date_input(
+        "Date de prise en charge",
+        value=datetime(2016, 6, 15),
+        min_value=datetime(2016, 1, 1),
+        max_value=datetime(2016, 12, 31),
+    )
+    pickup_time = st.time_input(
+        "Heure de prise en charge",
+        value=datetime(2016, 6, 15, 17, 30).time(),
+    )
+    pickup_dt = datetime.combine(pickup_date, pickup_time)
 
+    st.subheader("Contexte")
+    heure = pickup_dt.hour
+    jour  = pickup_dt.weekday()
+    is_rush    = (jour < 5) and (7 <= heure <= 9 or 17 <= heure <= 20)
+    is_weekend = jour >= 5
+    is_nuit    = heure >= 22 or heure <= 5
 
-# ── Carte ────────────────────────────────────────────────────────────────────
+    badges = []
+    if is_rush:    badges.append("🔴 Heure de pointe")
+    if is_weekend: badges.append("🟢 Week-end")
+    if is_nuit:    badges.append("🌙 Nuit")
+    if not badges: badges.append("⚪ Circulation normale")
+
+    for b in badges:
+        st.info(b)
+
+# ── Carte ─────────────────────────────────────────────────────────────────────
+
 st.subheader("Visualisation du trajet")
 
 points_df = pd.DataFrame([
-    {"lat": pickup_lat,  "lon": pickup_lon,  "type": "Départ",  "couleur": [0, 128, 255, 200]},
-    {"lat": dropoff_lat, "lon": dropoff_lon, "type": "Arrivée", "couleur": [255, 64, 64, 200]},
+    {"lat": pickup_lat,  "lon": pickup_lon,  "type": "Départ",  "couleur": [0, 128, 255, 220]},
+    {"lat": dropoff_lat, "lon": dropoff_lon, "type": "Arrivée", "couleur": [255, 64, 64, 220]},
 ])
 ligne_df = pd.DataFrame([{
     "depart":  [pickup_lon,  pickup_lat],
@@ -108,7 +206,7 @@ layer_points = pdk.Layer(
     data=points_df,
     get_position="[lon, lat]",
     get_color="couleur",
-    get_radius=200,
+    get_radius=250,
     pickable=True,
 )
 layer_ligne = pdk.Layer(
@@ -116,7 +214,7 @@ layer_ligne = pdk.Layer(
     data=ligne_df,
     get_source_position="depart",
     get_target_position="arrivee",
-    get_color=[100, 100, 100, 180],
+    get_color=[80, 80, 80, 160],
     get_width=4,
 )
 
@@ -131,31 +229,58 @@ st.pydeck_chart(pdk.Deck(
     layers=[layer_ligne, layer_points],
     initial_view_state=vue,
     tooltip={"text": "{type}"},
-    map_style="mapbox://styles/mapbox/light-v10",
+    map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
 ))
 
-# ── Prédiction ───────────────────────────────────────────────────────────────
+# ── Prédiction ────────────────────────────────────────────────────────────────
+
 st.divider()
-if st.button("Calculer la durée estimée", type="primary", use_container_width=True):
-    X = preparer_inference(
-        pickup_lat, pickup_lon,
-        dropoff_lat, dropoff_lon,
-        pickup_dt,
-        kmeans, paire_stats, mediane_globale,
-    )
-    duree_sec = float(np.expm1(modele.predict(X.values)[0]))
-    duree_min = duree_sec / 60
-    dist_km   = haversine(
-        (pickup_lat, pickup_lon), (dropoff_lat, dropoff_lon), unit=Unit.KILOMETERS
-    )
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Durée estimée", f"{duree_min:.0f} min {duree_sec % 60:.0f} sec")
-    c2.metric("Distance à vol d'oiseau", f"{dist_km:.2f} km")
-    c3.metric("Vitesse moyenne estimée", f"{dist_km / (duree_sec / 3600):.0f} km/h")
+if st.button("Calculer la durée estimée", type="primary", width="stretch"):
+    try:
+        X = preparer_inference(
+            pickup_lat, pickup_lon,
+            dropoff_lat, dropoff_lon,
+            pickup_dt,
+            kmeans, paire_stats, mediane_globale,
+        )
+        y_log  = modele.predict(X.values)[0]
+        output = postprocesser(y_log, pickup_lat, pickup_lon, dropoff_lat, dropoff_lon)
 
-    heure = pickup_dt.hour
-    if 7 <= heure <= 9 or 17 <= heure <= 20:
-        st.info("Heure de pointe détectée — durée potentiellement plus longue.")
-    elif heure >= 22 or heure <= 5:
-        st.success("Trajet de nuit — trafic faible, durée potentiellement plus courte.")
+        duree_sec = output.trip_duration_sec
+        duree_min = output.trip_duration_min
+        dist_km   = output.distance_km
+        vitesse   = dist_km / (duree_sec / 3600) if duree_sec > 0 else 0.0
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Durée estimée",           f"{int(duree_min)} min {int(duree_sec % 60)} s")
+        c2.metric("Distance (vol d'oiseau)", f"{dist_km:.2f} km")
+        c3.metric("Vitesse moyenne",         f"{vitesse:.0f} km/h")
+        c4.metric("Modèle utilisé",          info.version)
+
+        # Historique
+        if "historique" not in st.session_state:
+            st.session_state["historique"] = []
+
+        st.session_state["historique"].append({
+            "Départ (lat, lon)":   f"{pickup_lat:.4f}, {pickup_lon:.4f}",
+            "Arrivée (lat, lon)":  f"{dropoff_lat:.4f}, {dropoff_lon:.4f}",
+            "Date/heure":          pickup_dt.strftime("%Y-%m-%d %H:%M"),
+            "Distance (km)":       round(dist_km, 2),
+            "Durée estimée":       f"{int(duree_min)} min {int(duree_sec % 60)} s",
+            "Vitesse (km/h)":      round(vitesse, 0),
+        })
+
+    except Exception as e:
+        st.error(f"Erreur lors de la prédiction : {e}")
+
+# ── Historique ────────────────────────────────────────────────────────────────
+
+if st.session_state.get("historique"):
+    st.subheader("Historique des prédictions")
+    df_hist = pd.DataFrame(st.session_state["historique"][::-1])
+    st.dataframe(df_hist, hide_index=True)
+
+    if st.button("Effacer l'historique"):
+        st.session_state["historique"] = []
+        st.rerun()

@@ -5,41 +5,31 @@ Pattern : Synchronous (Web Single)
 Ref : https://github.com/mercari/ml-system-design-pattern/tree/master/Serving-patterns
 
 Lancement :
-    conda activate nyc-taxi
-    uvicorn api.server:app --reload
+    python -m api.main
 
 Endpoints :
-    GET  /health          — statut du service et version du modèle
-    POST /predict         — prédiction pour un trajet
-    GET  /docs            — documentation interactive (Swagger UI)
+    GET  /health              — statut du service
+    GET  /models              — modèles disponibles avec metadata
+    POST /predict             — prédiction single  (?model=nyc_taxi)
+    POST /predict/batch       — prédiction batch   (?model=nyc_taxi)
+    GET  /docs                — documentation interactive (Swagger UI)
 """
 
-import pickle
-from pathlib import Path
+from datetime import datetime, timezone
 
-import numpy as np
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Query
 
+from api.logger import logger_prediction
+from api.registry import DEFAULT_MODEL, ModelRegistry
+from data.postprocessing import postprocesser
 from data.preprocessing import preparer_inference
-from data.schema import PredictInput, PredictOutput
-
-# ── Chargement du modèle ──────────────────────────────────────────────────────
-
-MODEL_PATH = Path("models/nyc_taxi.model")
-
-def _charger_modele():
-    if not MODEL_PATH.exists():
-        raise RuntimeError(f"Modèle introuvable : {MODEL_PATH}. Lancez d'abord python -m model.train")
-    with open(MODEL_PATH, "rb") as f:
-        return pickle.load(f)
-
-artefact        = _charger_modele()
-modele          = artefact["modele"]
-kmeans          = artefact["kmeans"]
-paire_stats     = artefact["paire_stats"]
-mediane_globale = artefact["mediane_globale"]
-model_features  = artefact["features"]
+from data.schema import (
+    BatchPredictInput,
+    BatchPredictOutput,
+    ModelInfo,
+    PredictInput,
+    PredictResponse,
+)
 
 # ── Application ───────────────────────────────────────────────────────────────
 
@@ -49,43 +39,82 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# ── Schémas locaux ────────────────────────────────────────────────────────────
-# PredictInput et PredictOutput sont définis dans data/schema.py
-# et réutilisés ici pour garantir un contrat unique entre l'API et le pipeline.
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-class HealthResponse(BaseModel):
-    status:   str
-    features: list[str]
-
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-
-@app.get("/health", response_model=HealthResponse)
-def health():
-    return HealthResponse(status="ok", features=model_features)
-
-
-@app.post("/predict", response_model=PredictOutput)
-def predict(req: PredictInput):
+def _predire(req: PredictInput, version: str) -> PredictResponse:
+    """Exécute le pipeline complet pour un seul trajet."""
     try:
-        X = preparer_inference(
+        artefact, info = ModelRegistry.get(version)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    try:
+        X     = preparer_inference(
             req.pickup_lat, req.pickup_lon,
             req.dropoff_lat, req.dropoff_lon,
             req.pickup_datetime,
-            kmeans, paire_stats, mediane_globale,
+            artefact["kmeans"],
+            artefact["paire_stats"],
+            artefact["mediane_globale"],
         )
-        duree_sec = float(np.expm1(modele.predict(X.values)[0]))
+        y_log  = artefact["modele"].predict(X.values)[0]
+        output = postprocesser(y_log, req.pickup_lat, req.pickup_lon,
+                               req.dropoff_lat, req.dropoff_lon)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    from haversine import haversine, Unit
-    dist_km = haversine(
-        (req.pickup_lat, req.pickup_lon),
-        (req.dropoff_lat, req.dropoff_lon),
-        unit=Unit.KILOMETERS,
+    return PredictResponse(
+        **output.model_dump(),
+        model_version=info.version,
+        predicted_at=datetime.now(timezone.utc).isoformat(),
     )
 
-    return PredictOutput(
-        trip_duration_sec=round(duree_sec, 1),
-        trip_duration_min=round(duree_sec / 60, 2),
-        distance_km=round(dist_km, 3),
+
+# ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "models_disponibles": ModelRegistry.versions()}
+
+
+@app.get("/models", response_model=list[ModelInfo])
+def list_models():
+    """Liste les modèles disponibles avec leur metadata."""
+    result = []
+    for version in ModelRegistry.versions():
+        _, info = ModelRegistry.get(version)
+        result.append(info)
+    return result
+
+
+@app.post("/predict", response_model=PredictResponse)
+def predict(
+    req: PredictInput,
+    model: str = Query(default=DEFAULT_MODEL, description="Version du modèle à utiliser"),
+):
+    """Prédit la durée d'un trajet unique."""
+    response = _predire(req, model)
+    logger_prediction(req, response)
+    return response
+
+
+@app.post("/predict/batch", response_model=BatchPredictOutput)
+def predict_batch(
+    req: BatchPredictInput,
+    model: str = Query(default=DEFAULT_MODEL, description="Version du modèle à utiliser"),
+):
+    """Prédit la durée pour une liste de trajets (max 500)."""
+    predicted_at = datetime.now(timezone.utc).isoformat()
+    predictions  = []
+
+    for item in req.items:
+        response = _predire(item, model)
+        logger_prediction(item, response)
+        predictions.append(response)
+
+    return BatchPredictOutput(
+        predictions=predictions,
+        model_version=model,
+        predicted_at=predicted_at,
+        count=len(predictions),
     )
