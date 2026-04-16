@@ -25,6 +25,7 @@ from api.registry import ModelRegistry
 from config import CFG
 from data.postprocessing import postprocesser
 from data.preprocessing import preparer_inference
+from data.schema import PredictInput
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -189,8 +190,50 @@ with col_droite:
     for b in badges:
         st.info(b)
 
+# ── Prédiction ────────────────────────────────────────────────────────────────
+
+st.divider()
+
+if st.button("Calculer la durée estimée", type="primary", width="stretch"):
+    try:
+        req = PredictInput(
+            pickup_lat=pickup_lat, pickup_lon=pickup_lon,
+            dropoff_lat=dropoff_lat, dropoff_lon=dropoff_lon,
+            pickup_datetime=pickup_dt,
+        )
+        X = preparer_inference(req, kmeans, paire_stats, mediane_globale)
+        y_log  = modele.predict(X.values)[0]
+        output = postprocesser(y_log, pickup_lat, pickup_lon, dropoff_lat, dropoff_lon)
+
+        duree_sec = output.trip_duration_sec
+        duree_min = output.trip_duration_min
+        dist_km   = output.distance_km
+        vitesse   = dist_km / (duree_sec / 3600) if duree_sec > 0 else 0.0
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Durée estimée",           f"{int(duree_min)} min {int(duree_sec % 60)} s")
+        c2.metric("Distance (vol d'oiseau)", f"{dist_km:.2f} km")
+        c3.metric("Vitesse moyenne",         f"{vitesse:.0f} km/h")
+        c4.metric("Modèle utilisé",          info.version)
+
+        if "historique" not in st.session_state:
+            st.session_state["historique"] = []
+
+        st.session_state["historique"].append({
+            "Départ (lat, lon)":   f"{pickup_lat:.4f}, {pickup_lon:.4f}",
+            "Arrivée (lat, lon)":  f"{dropoff_lat:.4f}, {dropoff_lon:.4f}",
+            "Date/heure":          pickup_dt.strftime("%Y-%m-%d %H:%M"),
+            "Distance (km)":       round(dist_km, 2),
+            "Durée estimée":       f"{int(duree_min)} min {int(duree_sec % 60)} s",
+            "Vitesse (km/h)":      round(vitesse, 0),
+        })
+
+    except Exception as e:
+        st.error(f"Erreur lors de la prédiction : {e}")
+
 # ── Carte ─────────────────────────────────────────────────────────────────────
 
+st.divider()
 st.subheader("Visualisation du trajet")
 
 points_df = pd.DataFrame([
@@ -232,48 +275,6 @@ st.pydeck_chart(pdk.Deck(
     tooltip={"text": "{type}"},
     map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
 ))
-
-# ── Prédiction ────────────────────────────────────────────────────────────────
-
-st.divider()
-
-if st.button("Calculer la durée estimée", type="primary", width="stretch"):
-    try:
-        X = preparer_inference(
-            pickup_lat, pickup_lon,
-            dropoff_lat, dropoff_lon,
-            pickup_dt,
-            kmeans, paire_stats, mediane_globale,
-        )
-        y_log  = modele.predict(X.values)[0]
-        output = postprocesser(y_log, pickup_lat, pickup_lon, dropoff_lat, dropoff_lon)
-
-        duree_sec = output.trip_duration_sec
-        duree_min = output.trip_duration_min
-        dist_km   = output.distance_km
-        vitesse   = dist_km / (duree_sec / 3600) if duree_sec > 0 else 0.0
-
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Durée estimée",           f"{int(duree_min)} min {int(duree_sec % 60)} s")
-        c2.metric("Distance (vol d'oiseau)", f"{dist_km:.2f} km")
-        c3.metric("Vitesse moyenne",         f"{vitesse:.0f} km/h")
-        c4.metric("Modèle utilisé",          info.version)
-
-        # Historique
-        if "historique" not in st.session_state:
-            st.session_state["historique"] = []
-
-        st.session_state["historique"].append({
-            "Départ (lat, lon)":   f"{pickup_lat:.4f}, {pickup_lon:.4f}",
-            "Arrivée (lat, lon)":  f"{dropoff_lat:.4f}, {dropoff_lon:.4f}",
-            "Date/heure":          pickup_dt.strftime("%Y-%m-%d %H:%M"),
-            "Distance (km)":       round(dist_km, 2),
-            "Durée estimée":       f"{int(duree_min)} min {int(duree_sec % 60)} s",
-            "Vitesse (km/h)":      round(vitesse, 0),
-        })
-
-    except Exception as e:
-        st.error(f"Erreur lors de la prédiction : {e}")
 
 # ── Historique ────────────────────────────────────────────────────────────────
 

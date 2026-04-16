@@ -2,8 +2,7 @@
 Pipeline de preprocessing partagé entre entraînement et inférence.
 
 INFÉRENCE (train + val + test + api) :
-    preparer_inference(pickup_lat, pickup_lon, dropoff_lat, dropoff_lon,
-                       pickup_datetime, kmeans, paire_stats, mediane_globale)
+    preparer_inference(req, kmeans, paire_stats, mediane_globale)
     → pd.DataFrame d'une ligne prêt pour model.predict()
 
 ENTRAÎNEMENT uniquement (nécessite trip_duration) :
@@ -15,7 +14,7 @@ UTILITAIRE :
     rmsle(y_true, y_pred)
 """
 
-from datetime import datetime
+from __future__ import annotations
 
 import numpy as np
 import pandas as pd
@@ -49,6 +48,7 @@ JOURS_ANORMAUX = {
 # ── Métrique ──────────────────────────────────────────────────────────────────
 
 def rmsle(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Root Mean Squared Logarithmic Error."""
     return np.sqrt(np.mean((np.log1p(y_pred) - np.log1p(y_true)) ** 2))
 
 
